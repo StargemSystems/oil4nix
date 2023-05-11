@@ -1,0 +1,147 @@
+#! /usr/bin/env ysh
+#|
+#| Grease ~ A lib to thicken the oil shell
+
+module grease.oil || return 0
+
+# allow json values
+if ! test -v True { 
+  const True, False, None = true, false, null }
+
+# what `bc` and `$((BASE#NUM))` use for base conversion
+if ! test -v BC_BASE_CHARS { 
+  const BC_BASE_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@_' }
+
+# alias doas to sudo if not found
+if ! boolstatus which doas &>/dev/null {
+  proc doas(@argv) { sudo @argv }
+}
+
+proc ls-procs() { pp proc | cut -f1 }
+proc dt-stamp() { date --utc +%Y%m%d%H%M%S }
+proc uuid2dec(item) { echo $((16#${item//-/})) }
+proc wakelock(@argv) { systemd-inhibit --what=idle:sleep:handle-lid-switch @argv }
+proc base20(num) { str-lower $num | num-chBase 'bcdfghjklmnpqrstvwxz' }
+proc base58(num) { num-chBase '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' $num }
+
+proc paramize(:result, @params) {
+  ### override and set default options
+  jo @params | json read :parsed
+  setref result = parsed
+}
+
+proc nsidgen(seed=null, base='@oid') {
+  ### generate namespaced uuids
+  if (not seed) { read --line :seed }
+  uuidgen --sha1 --namespace $base --name $seed
+}
+
+proc gpg-fprt(iden=USER) {
+  ### return any matching gnupg keyids
+  try gpg --list-options show-only-fpr-mbox \
+    --list-keys $iden 2>/dev/null || return 1
+}
+
+proc gpg-eval(@argv) {
+  ### script-able gnupg interface
+  var base_cmd = %(gpg --with-colons --command-fd 0 --status-fd 2)
+  eval $join(base_cmd ++ argv, ' ')
+}
+
+proc round-bytes(number, asFloat=false) {
+  ### simplify values of memory units
+  var pattr = '%.2f' if (asFloat) else '%0.f'
+  numfmt --format=$pattr --round=nearest \
+    --from=iec --to=iec $number
+}
+
+proc num-chBase-encode(charset, number=null) {
+  ### encode decimal with charset
+  var result = []; if (not number) { read --line :number }
+  setvar number = @(echo "obase=${#charset};${number}" | bc | tr -d '\\\n')
+  for i in @number { append :result $[BC_BASE_CHARS[i + 0]] }
+  echo $join(result) | tr $BC_BASE_CHARS $charset
+}
+
+proc num-chBase-decode(charset, number=null) {
+  ### decode decimal with charset
+  if (not number) { read --line :number }
+  setvar number = $(echo $number | tr $charset $BC_BASE_CHARS)
+  echo $((${#charset}#$number))
+}
+
+proc num-chBase(charset, number=null) {
+  ### change between decimal and arbitrary bases
+  if (not number) { read --line :number }
+  if (number ~ / %start digit+ %end /) {
+    num-chBase-encode $charset $number
+  } else { 
+    num-chBase-decode $charset $number
+  }
+}
+
+proc str-mesure(str=null) {
+  ### calc dims of text block
+  if (not str) { read --line :str }
+  echo $str | wc --max-line-length
+  echo $str | wc --lines
+}
+
+proc str-repeat(count, chars) {
+  ### dup string some number of times
+  printf %$[count]s | tr ' ' $chars
+}
+
+proc str-strip(rgx, str=null) {
+  ### remove matches from string
+  if (not str) { read --line :str }
+  echo $str | rg $rgx -r ''
+}
+
+proc str-squee(chr, str=null) {
+  ### squeeze repeating characters into one
+  if (not str) { read --line :str }
+  echo $str | tr -s $chr
+}
+
+proc str-upper(str=null) {
+  if (not str) { read --line :str }
+  echo $str | tr '[:lower:]' '[:upper:]'
+}
+
+proc str-lower(str=null) {
+  if (not str) { read --line :str }
+  echo $str | tr '[:upper:]' '[:lower:]'
+}
+
+proc rand-num(upper=100, lower=1) {
+  ### random number between upper and lower bounds
+  shuf -i$lower-$upper -n1
+}
+
+proc rand-itm(@items) {
+  ### random item from a list
+  var num = len(items)
+  var idx = $(rand-num $num) - 1
+  write $[items[idx]]
+}
+
+proc read-nix-file(:out, targ, @args) {
+  ### read nix file into variable
+  nix eval --json --file $targ @args 2>/dev/null | json read :res
+  setref out = res
+}
+
+proc read-nix-expr(:out, code, @args) {
+  ### read nix expr into variable
+  nix eval --json --expr $code @args 2>/dev/null | json read :res
+  setref out = res
+}
+
+proc blkdev-serial(dev) {
+  var res = $(lsblk -ndo vendor,model,serial $dev | tr -cs '[:alnum:]' '_' | str-upper)
+  echo $[res[1:-1]]
+}
+
+#|
+#|
